@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Daily Crossword</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="core.css">
+<script src="games.js"></script>
+<!-- sudoku's grid shape is per difficulty (Mini is 6x6), and the engine is
+     where that is defined; harmless for games that never consult it -->
+<style>
+  /* Archive — Figma 273:48472 (standalone screen) */
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;height:100%;background:#fff;font-family:var(--font);color:var(--ink)}
+  /* core.css clips #app so a game board cannot spill; an archive is a list
+     and has to be able to run past the fold, so it scrolls instead. */
+  html,body{overflow-y:auto}
+  #app{width:100%;max-width:880px;margin:0 auto;min-height:100%;background:#fff;overflow:visible;
+       display:flex;flex-direction:column;gap:40px;padding:24px 20px 40px}
+  .ahead{display:flex;flex-direction:column;gap:2px;width:100%}
+  .ahead h1{margin:0;font-weight:900;font-size:18px;color:var(--ink);text-align:center;line-height:normal}
+  .ahead p{margin:0;font-weight:400;font-size:14px;color:var(--ink);text-align:center;line-height:normal}
+  .alist{display:flex;flex-direction:column;width:100%}
+  .aitem{display:flex;flex-direction:column;width:100%}
+  .aitem .row{display:flex;gap:16px;align-items:center;padding:18px 32px 18px 16px;width:100%;
+              background:none;border:none;font-family:var(--font);text-align:left;cursor:pointer;color:var(--ink)}
+  .aitem .row:hover{background:#faf1e8}
+  .aitem .divider{height:1px;background:var(--panel-line);width:100%}
+  /* 35px mini grid glyph — Figma 273:48480 */
+  .mini{width:35px;height:35px;flex:none;border:1px solid var(--ink);border-radius:5px;
+        display:flex;align-items:center;justify-content:center;color:var(--ink);padding:3px}
+  .mini svg{width:100%;height:100%;display:block}
+  .mini.photo{border:none;overflow:hidden;background:#e8e8e8}
+  .mini.photo img{width:100%;height:100%;object-fit:cover;display:block}
+  .det{flex:1 0 0;min-width:0;display:flex;flex-direction:column;color:var(--ink)}
+  .det .t{font-weight:700;font-size:18px;line-height:normal}
+  .det .b{font-weight:400;font-size:14px;line-height:1.4}
+  .chev{width:24px;height:24px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--ink)}
+  /* progress indicator — ring + pill, read from local play state */
+  .status{display:flex;align-items:center;gap:10px;flex:none}
+  .ring{flex:none;display:block}
+  .ring .track{stroke:#d9d9d9}
+  .ring .fill{stroke:var(--ink);transition:stroke-dashoffset .3s}
+  .status.completed .ring .track{stroke:var(--ok)}
+  .status.completed .ring .fill{stroke:var(--ok)}
+  .status.completed .tick{stroke:var(--ok)}
+  .pill2{font-size:13px;font-weight:600;padding:4px 12px;border-radius:20px;white-space:nowrap;
+         line-height:1.3}
+  .status.completed .pill2{background:var(--ok-bg);color:var(--ok-ink)}
+  .status.started   .pill2{background:var(--band);color:var(--ink)}
+  /* "29% Answered" is amber on pale yellow, with the ring to match */
+  .status.answered  .pill2{background:#fffcc7;color:#e9ab00;border:1px solid #e9ab00}
+  .status.answered .ring .fill{stroke:#e9ab00}
+  .status.answered .ring .track{stroke:#f0e3a8}
+  .aitem .row.done{background:#f6f6f6}
+  .aitem .row.done:hover{background:#f0ede9}
+  .empty{padding:40px 16px;text-align:center;font-size:14px;color:#8a8a8a}
+  @media(max-width:720px){
+    #app{gap:28px;padding:20px 12px 32px}
+    .aitem .row{padding:16px 12px 16px 8px;gap:12px}
+    .det .t{font-size:16px}
+    .pill2{display:none}          /* ring alone carries the state on narrow screens */
+    /* except the percentage, which is the whole point of the label. The frame
+       puts it under the byline rather than beside the title, which keeps the
+       date on two lines instead of squeezing it onto three. */
+    .status.answered .pill2{display:inline-block}
+    .row.haspct{flex-wrap:wrap}
+    .row.haspct .chev{order:3}
+    .row.haspct .status{order:4;flex-basis:100%;margin:6px 0 0 45px;gap:8px}
+    .status{gap:0}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="ahead">
+    <h1 id="aTitle">Daily Crossword</h1>
+    <p id="aSub">An engaging new puzzle to conquer each day.</p>
+  </div>
+  <div class="alist" id="aList"><div class="empty">Loading&hellip;</div></div>
+</div>
+
+<script src="core.js"></script>
+<script>
+(async function(){
+  const b64dec=XW.b64dec;
+  const listEl=document.getElementById('aList');
+  const {id:GID, game:G}=resolveGame(new URLSearchParams(location.search).get('game'));
+  const LVL0=new URLSearchParams(location.search).get('d')||'';
+  const cap=s=>s?s.charAt(0).toUpperCase()+s.slice(1):'';
+  /* a fixed-level game already says what it is in its own name */
+  const showLvl=(G.generated&&G.generated.byDifficulty)?LVL0:'';
+  /* a game still being tried out says so wherever it is named */
+  const tagSuffix=G.tag?' · '+G.tag:'';
+  document.getElementById('aTitle').textContent=G.label+(showLvl?' · '+cap(showLvl):'')+tagSuffix;
+  document.getElementById('aSub').textContent=G.archiveBlurb||G.blurb||'';
+  document.title=G.label+(showLvl?' · '+cap(showLvl):'');
+  XW.gameId=GID;
+
+  /* A generated game (sudoku) has no index to fetch: the date IS the puzzle,
+     so the list is simply the last N days up to today. Today is the newest
+     entry that can exist, which is why tomorrow can never be listed. */
+  let man=null;
+  const LEVEL=new URLSearchParams(location.search).get('d')||'';
+  if(G.generated){
+    /* Each difficulty is its own archive: the level is part of every id, so
+       progress on Easy and Expert for one date never share a saved solve. */
+    /* a fixed level wins over ?d=; only a by-difficulty game reads the URL */
+    const lvl=G.generated.level||(G.generated.byDifficulty?(LEVEL||'medium'):'');
+    const idp=G.generated.idPrefix||GID;
+    /* The shape belongs to the difficulty, not the game: Mini is a 6x6 while
+       every other level is 9x9. Ask the engine rather than repeating the
+       numbers in the roster, where the two copies would drift apart. */
+    let gsize=G.generated.size||'', gcells=G.generated.cells||0;
+    const shape=window.SUDOKU&&window.SUDOKU.DIFFICULTY&&window.SUDOKU.DIFFICULTY[lvl];
+    if(shape&&shape.bw&&shape.bh){
+      const n=shape.bw*shape.bh; gsize=n+'x'+n; gcells=n*n;
+    }
+    const days=G.generated.days||30, out=[];
+    const d=new Date();
+    for(let k=0;k<days;k++){
+      const t=new Date(d.getFullYear(),d.getMonth(),d.getDate()-k);
+      const iso=t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+      out.push({id:idp+(lvl?'-'+lvl:'')+'-'+iso, title:G.label, date:iso,
+                size:gsize, cells:gcells, status:'published'});
+    }
+    man={schema:2, source:'generated', index:out};
+
+    /* HYBRID (Word Search): authored puzzles are the editorial path, and a
+       date nobody authored falls back to the generated one — so the archive
+       never has a hole in it. The authored index wins per DATE, which is the
+       only key the two sources share: a generated row is keyed
+       <game>-<date>, an authored one carries whatever id the editor gave it. */
+    if(G.generated.fallback){
+      const base=window.apiBase?window.apiBase(G):'';
+      const tryIndex=async u=>{
+        try{
+          const m=await (await fetch(u,{cache:'no-store'})).json();
+          return Array.isArray(m.index)?m:null;
+        }catch(e){ return null; }
+      };
+      /* Both sources are read and merged, not the first one that answers: a
+         backend with nothing uploaded for this game returns an index that is
+         a valid empty array, which would otherwise silently suppress the
+         static manifest and hide every hand-authored puzzle. */
+      const byDate={};
+      const collect=m=>{ if(!m)return;
+        m.index.forEach(r=>{ if(r.status!=='draft'&&r.date) byDate[r.date]=r; }); };
+      if(G.manifest) collect(await tryIndex(G.manifest));
+      if(base) collect(await tryIndex(base+'/api/index?game='+encodeURIComponent(GID)));
+      if(Object.keys(byDate).length){
+        man={schema:2, source:'hybrid',
+             index:out.map(g=>byDate[g.date]?Object.assign({},g,byDate[g.date]):g)};
+      }
+    }
+  }
+  const API=(!man&&window.apiBase)?window.apiBase(G):'';
+  if(API){
+    try{ man=await (await fetch(API+'/api/index?game='+encodeURIComponent(GID),{cache:'no-store'})).json(); }
+    catch(e){ console.warn('[archive] backend unavailable, using static files:',e&&e.message); }
+    /* An empty backend index, for a game that ships a static one, is read the
+       way the player reads it (core.js loadPuzzle): nothing uploaded yet, so
+       the static puzzles stand in. Without this the player opened a puzzle
+       that the archive said did not exist. */
+    if(man&&!(Array.isArray(man.index)&&man.index.length)&&G.manifest) man=null;
+  }
+  if(!man){
+    /* this game's own static index or none — falling back to puzzles.json would
+       list the Daily Crossword's back catalogue under a Mini's heading */
+    if(!G.manifest){
+      listEl.innerHTML='<div class="empty">Puzzles for this game are served from the backend, which is not reachable right now.</div>';
+      return;
+    }
+    try{ man=await (await fetch(G.manifest,{cache:'no-store'})).json(); }
+    catch(e){ listEl.innerHTML='<div class="empty">Could not load the puzzle index. Serve this over http(s), not file://.</div>'; return; }
+  }
+
+  /* Works with the current schema (puzzles map) and with the schema-2 index
+     described in ARCHIVE-PLAN.md, so this page does not block that migration. */
+  let items=[];
+  if(Array.isArray(man.index)&&man.index.length){
+    items=man.index.filter(r=>r.status!=='draft').map(r=>({
+      id:r.id, title:r.title||r.id, date:r.date,
+      author:r.author||(r.byline&&r.byline.constructor)||'',
+      editor:r.editor||(r.byline&&r.byline.editor)||'',
+      size:r.size||(r.meta&&r.meta.size)||'', cells:r.cells||0,
+      image:r.image||''
+    }));
+  }else{
+    items=Object.keys(man.puzzles||{}).map(id=>{
+      const e=man.puzzles[id];
+      let o={};
+      try{ o=(typeof e==='string')?JSON.parse(b64dec(e)):e; }catch(_){}
+      return {id, title:o.title||id, date:o.date, author:o.author, editor:o.editor,
+              size:(o.W&&o.H)?o.W+'x'+o.H:''};
+    });
+  }
+  items.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  /* Every archive shows the most recent MAX_ENTRIES and no more. Older puzzles
+     are still reachable by id — this caps the page, not the back catalogue. */
+  const MAX_ENTRIES=14;
+  items=items.slice(0,MAX_ENTRIES);
+
+  const DOW=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function label(it){
+    if(!it.date) return it.title;
+    const d=new Date(it.date+'T00:00:00');
+    if(isNaN(d)) return it.title;
+    return 'L. A. Times, '+DOW[d.getDay()]+', '+MON[d.getMonth()]+' '+d.getDate()+', '+d.getFullYear();
+  }
+  function byline(it){
+    const parts=[];
+    if(it.author)parts.push('by '+it.author);
+    if(it.editor)parts.push('Ed. '+it.editor);
+    /* "15x15 grid" for a grid; anything else (Word Flower's "43 words") reads
+       as it is */
+    if(parts.length) return parts.join(' / ');
+    if(!it.size) return '';
+    return /^\d+x\d+/.test(it.size)?it.size+' grid':it.size;
+  }
+  /* Play state comes from the shared store, so the archive needs no backend and
+     never fetches a payload — `cells` in the index supplies the denominator. */
+  function state(it){
+    const st=XW.storage.load(it.id);
+    if(!st)return null;
+    /* games that don't store a letters map say how far along they are */
+    const filled=(typeof st.filled==='number')?st.filled:Object.keys(st.letters||{}).length;
+    if(st.completed)return {kind:'completed',label:'Completed',pct:1};
+    if(!filled)return null;
+    const total=(typeof st.total==='number'&&st.total)?st.total:(it.cells||0);
+    const pct=total?Math.min(1,filled/total):0.12;
+    /* Word Search's archive frame labels a part-done puzzle "29% Answered"
+       rather than "Started"; the roster says which wording a game wants. */
+    const answered=(G.progressLabel==='answered');
+    return {kind:answered?'answered':'started',
+            label:answered?(Math.round(pct*100)+'% Answered'):'Started', pct:pct};
+  }
+  /* A photo puzzle's row mark is a small copy of its own photo, drawn here
+     rather than stored as a second file. The first time, the photo itself
+     loads (lazily, as its row scrolls into view) and a 70px copy is kept in
+     this browser; every later visit uses that copy and loads nothing. The
+     player keeps the same copy when a puzzle is played. */
+  const THUMB_KEY='lat:games:thumb:';
+  function photoThumb(img,src){
+    try{ const kept=localStorage.getItem(THUMB_KEY+src); if(kept){ img.src=kept; return; } }catch(_){}
+    /* a photo kept by the API is cross-origin; without CORS the copy can't be read back */
+    if(/^https?:/i.test(src)) img.crossOrigin='anonymous';
+    img.onload=()=>{
+      img.onload=null;
+      try{
+        const c=document.createElement('canvas'); c.width=c.height=70;
+        const s=Math.min(img.naturalWidth,img.naturalHeight);
+        c.getContext('2d').drawImage(img,(img.naturalWidth-s)/2,(img.naturalHeight-s)/2,s,s,0,0,70,70);
+        localStorage.setItem(THUMB_KEY+src,c.toDataURL('image/jpeg',0.72));
+      }catch(_){}
+    };
+    img.src=src;
+  }
+  const R=10, C=2*Math.PI*R;
+  function ringSVG(s){
+    const off=C*(1-s.pct);
+    return '<svg class="ring" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">'+
+      '<circle class="track" cx="12" cy="12" r="'+R+'" fill="none" stroke-width="2.4"/>'+
+      '<circle class="fill" cx="12" cy="12" r="'+R+'" fill="none" stroke-width="2.4" stroke-linecap="round"'+
+      ' stroke-dasharray="'+C.toFixed(2)+'" stroke-dashoffset="'+off.toFixed(2)+'"'+
+      ' transform="rotate(-90 12 12)"/>'+
+      (s.kind==='completed'
+        ? '<path class="tick" d="M7.6 12.3l2.9 2.9 5.9-6.2" fill="none" stroke-width="2.2"'+
+          ' stroke-linecap="round" stroke-linejoin="round"/>'
+        : '')+
+      '</svg>';
+  }
+
+  if(!items.length){ listEl.innerHTML='<div class="empty">No puzzles yet.</div>'; return; }
+
+
+  listEl.innerHTML='';
+  items.forEach(it=>{
+    const wrap=document.createElement('div');wrap.className='aitem';
+    const row=document.createElement('button');row.className='row';
+    /* a game may supply a mark drawn for this 35px box rather than the hub's */
+    /* ...or, for a game whose puzzles ARE pictures, the day's own picture */
+    const mini=(G.photoThumbs&&it.image)
+      ?'<div class="mini photo"><img alt="" loading="lazy"/></div>'
+      :'<div class="mini">'+(G.archiveArt||G.art||'')+'</div>';
+    const st=state(it);
+    row.innerHTML=mini+
+      '<div class="det"><div class="t"></div><div class="b"></div></div>'+
+      (st?'<div class="status '+st.kind+'">'+ringSVG(st)+'<span class="pill2">'+st.label+'</span></div>':'')+
+      '<div class="chev"><svg width="10" height="16" aria-hidden="true"><use href="icons.svg#i-chevron-lg"/></svg></div>';
+    const thumb=row.querySelector('.mini.photo img');
+    if(thumb) photoThumb(thumb,it.image);
+    row.querySelector('.t').textContent=label(it);
+    row.querySelector('.b').textContent=byline(it);
+    if(st){
+      row.classList.toggle('done',st.kind==='completed');
+      /* a percentage pill needs its own line on a phone — see the CSS */
+      row.classList.toggle('haspct',st.kind==='answered');
+      row.setAttribute('aria-label',label(it)+' — '+st.label+
+        (st.kind==='started'?', '+Math.round(st.pct*100)+'% filled':''));
+    }
+    row.addEventListener('click',()=>XW.goPuzzle(it.id));
+    const div=document.createElement('div');div.className='divider';
+    wrap.appendChild(row);wrap.appendChild(div);listEl.appendChild(wrap);
+  });
+})();
+</script>
+</body>
+</html>

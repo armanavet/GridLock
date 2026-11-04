@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Gridlock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="core.css">
+<script src="games.js"></script>
+<style>
+  /* Stands in for the host page around an embedded game. The iframe is the
+     point here: it reproduces the constraints the player will actually run
+     under on latimes.com. The hub (index.html) is a real page, not an embed. */
+  html,body{height:100%;background:#fafafa}
+  .page{max-width:1120px;margin:0 auto;min-height:100%;display:flex;flex-direction:column}
+  .pbar{display:flex;align-items:center;gap:10px;padding:16px 20px;flex:none}
+  .back{display:inline-flex;align-items:center;gap:9px;text-decoration:none;color:var(--ink);
+        font-size:16px;font-weight:700;padding:6px 10px 6px 4px;border-radius:8px}
+  .back:hover{background:#efefef}
+  .back svg{transform:scaleX(-1)}
+  .frame{flex:1;min-height:0;padding:0 20px 28px}
+  iframe{display:block;width:100%;height:780px;border:none;background:#fff;
+         border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.10)}
+  @media(max-width:720px){
+    .pbar{padding:10px 12px}
+    .back{font-size:15px}
+    .frame{padding:0}
+    iframe{height:calc(100vh - 56px);border-radius:0;box-shadow:none}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="pbar">
+    <a class="back" id="back" href="index.html">
+      <svg width="10" height="16" aria-hidden="true"><use href="icons.svg#i-chevron-lg"/></svg>
+      Back to Games
+    </a>
+  </header>
+  <div class="frame">
+    <iframe id="game" allow="web-share; fullscreen" title="Puzzle"></iframe>
+  </div>
+</div>
+
+<script>
+/* The page around the game, as on the site.
+     index.html            -> the archive
+     index.html?p=<id>     -> that puzzle
+
+   BACK_URL is where "Back to Games" goes. There is no games page here, so
+   left empty it returns from a puzzle to the archive and is hidden on the
+   archive itself. Set it to send readers back to a page of your own.
+
+   HOST_ORIGIN applies if this page is itself embedded in another site: every
+   message from the game is passed up to that site, unchanged. */
+const BACK_URL = '';
+const HOST_ORIGIN = '*';
+
+const p = new URLSearchParams(location.search).get('p');
+const g = window.GAMES.gridlock;
+const canon = '&canonical=' + encodeURIComponent(location.href);
+
+const frame = document.getElementById('game');
+frame.src = p ? g.player + '?game=gridlock&p=' + encodeURIComponent(p) + canon
+              : g.archive + '?game=gridlock' + canon;
+frame.title = g.label;
+document.title = p ? g.label : g.label + ' archive';
+
+const back = document.getElementById('back');
+if (BACK_URL) back.href = BACK_URL;
+else if (!p) back.style.visibility = 'hidden';
+
+/* Every message the game sends reaches this window, as it reaches the page
+   around a game on the site. "navigate" is the one this page acts on. */
+addEventListener('message', (e) => {
+  if (e.source !== frame.contentWindow) return;
+  const d = e.data;
+  if (!d || d.source !== 'lat-games') return;
+  if (window.parent !== window) window.parent.postMessage(d, HOST_ORIGIN);
+  if (d.event !== 'navigate') return;
+  location.href = d.puzzleId ? 'index.html?p=' + encodeURIComponent(d.puzzleId) : 'index.html';
+});
+</script>
+</body>
+</html>
